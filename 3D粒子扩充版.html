@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D手势粒子系统(扩充版)</title>
+    
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000000; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+
+        #ui-layer { position: absolute; z-index: 10; pointer-events: none; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; box-sizing: border-box; }
+        .pointer-events-auto { pointer-events: auto; }
+
+        #video-preview { 
+            position: absolute; bottom: 20px; right: 20px; width: 160px; height: 120px; 
+            border-radius: 12px; border: 2px solid rgba(255,255,255,0.2); 
+            transform: scaleX(-1);
+            background: #000;
+            opacity: 0.6;
+            transition: opacity 0.3s;
+            box-shadow: 0 0 15px rgba(99, 102, 241, 0.5);
+            display: none; 
+            z-index: 20;
+        }
+        #video-preview.active { display: block; }
+        #video-preview:hover { opacity: 1; }
+
+        .glass-panel {
+            background: rgba(10, 10, 10, 0.75);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+            transition: all 0.3s ease;
+        }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: #ccc;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn:hover { background: rgba(255, 255, 255, 0.15); transform: translateY(-1px); color: #fff; box-shadow: 0 0 10px rgba(255,255,255,0.1); }
+        .btn.active { background: rgba(99, 102, 241, 0.2); border-color: #6366f1; color: #818cf8; box-shadow: 0 0 15px rgba(99, 102, 241, 0.3); }
+
+        input[type="range"] { accent-color: #6366f1; }
+        
+        .custom-scroll::-webkit-scrollbar { width: 4px; }
+        .custom-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); }
+        .custom-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+        #loader {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 100;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            transition: opacity 0.8s ease;
+            pointer-events: none;
+        }
+        .spinner {
+            width: 60px; height: 60px; border: 3px solid rgba(255,255,255,0.1);
+            border-radius: 50%; border-top-color: #818cf8;
+            animation: spin 1s cubic-bezier(0.68, -0.55, 0.27, 1.55) infinite;
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.5);
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        #retry-cam-btn {
+            display: none; margin-top: 5px; background: #ef4444; color: white;
+            font-size: 10px; padding: 4px 8px; border-radius: 4px; cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loader">
+        <div class="spinner"></div>
+        <p class="mt-6 text-gray-300 font-light tracking-widest text-sm">QUANTUM PARTICLES</p>
+        <p class="text-xs text-gray-500 mt-2">Initializing 100 Models...</p>
+    </div>
+
+    <div id="canvas-container"></div>
+    <div id="ui-layer">
+        <div class="flex justify-between items-start pointer-events-auto">
+            <div class="glass-panel border-l-4 border-indigo-500">
+                <h1 class="text-2xl font-black italic tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-300 to-cyan-300 filter drop-shadow-lg">
+                    NEON MORPH
+                </h1>
+                <p class="text-[10px] text-indigo-200/70 mt-1 uppercase tracking-widest">Ultimate Edition (100 Shapes)</p>
+            </div>
+
+            <div class="glass-panel flex gap-2">
+                <button id="btn-audio" class="btn">🎵 律动</button>
+                <button id="btn-bloom" class="btn active">✨ 辉光</button>
+                <button id="btn-fullscreen" class="btn">⛶ 全屏</button>
+                <button id="btn-snapshot" class="btn">📸 截图</button>
+            </div>
+        </div>
+        <div class="absolute top-28 left-5 glass-panel w-72 pointer-events-auto flex flex-col gap-4 max-h-[75vh] overflow-hidden border border-white/5">
+            <div class="flex-1 overflow-y-auto custom-scroll pr-2">
+                <label class="text-[10px] uppercase text-indigo-300/80 font-bold mb-3 block sticky top-0 bg-[#0a0a0a]/90 backdrop-blur-md z-10 py-2 border-b border-white/5">
+                    Geometries (100)
+                </label>
+                <div class="grid grid-cols-2 gap-2" id="shape-buttons">
+                </div>
+            </div>
+
+            <div class="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent w-full"></div>
+            <div class="flex-shrink-0">
+                <label class="text-[10px] uppercase text-indigo-300/80 font-bold mb-3 block">Appearance</label>
+                
+                <div class="mb-4">
+                     <div class="flex justify-between text-xs text-gray-400 mb-1">
+                        <span>Particle Size</span>
+                        <span id="size-val">0.12</span>
+                    </div>
+                    <input type="range" id="size-slider" min="0.01" max="0.4" step="0.01" value="0.12" class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-400">Base Color</span>
+                    <input type="color" id="color-picker" value="#6366f1" class="bg-transparent border-0 w-8 h-6 cursor-pointer rounded overflow-hidden">
+                </div>
+            </div>
+            
+            <div class="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent w-full"></div>
+
+            <div class="flex-shrink-0">
+                <div class="flex justify-between items-end">
+                    <div class="text-[10px] text-gray-500 font-mono">
+                        <div>FPS: <span id="fps-counter" class="text-green-400">--</span></div>
+                        <div>OBJ: <span class="text-indigo-400">30k</span></div>
+                    </div>
+                    <div class="flex flex-col items-end">
+                        <div id="status-gesture" class="text-xs px-2 py-1 rounded bg-yellow-500/20 text-yellow-300 border border-yellow-500/30">
+                            LOADING AI...
+                        </div>
+                        <button id="retry-cam-btn">Manual Start</button>
+                    </div>
+                </div>
+                <div id="camera-tip" class="text-[9px] text-gray-500 mt-1 text-right">
+                    * AI 加载中，请先使用鼠标
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <video id="video-preview" class="pointer-events-auto" playsinline></video>
+
+<script>
+
+setTimeout(() => {
+    const loader = document.getElementById('loader');
+    if (loader) loader.style.opacity = '0';
+    setTimeout(() => { if(loader) loader.style.display = 'none'; }, 800);
+}, 1500); 
+
+const CONFIG = {
+    particleCount: 30000,
+    bgParticleCount: 2000,
+    baseSize: 0.12,
+    morphSpeed: 0.08,
+    handInfluenceSpeed: 0.15,
+    audioSensitivity: 2.0,
+    bloomStrength: 1.2,
+    bloomRadius: 0.5,
+    bloomThreshold: 0.15
+};
+
+const STATE = {
+    currentShape: 'sphere',
+    targetScale: 1,
+    currentScale: 1,
+    handDetected: false,
+    audioEnabled: false,
+    bloomEnabled: true,
+    hueOffset: 0,
+    mouse: new THREE.Vector2(-9999, -9999),
+    time: 0
+};
+
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020205); 
+scene.fog = new THREE.FogExp2(0x020205, 0.02);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = 28;
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+container.appendChild(renderer.domElement);
+
+let composer;
+let renderPass, bloomPass;
+
+function initBloom() {
+    try {
+        if (typeof THREE.EffectComposer === 'undefined') throw new Error("No Composer Lib");
+        
+        renderPass = new THREE.RenderPass(scene, camera);
+        bloomPass = new THREE.UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            CONFIG.bloomStrength, CONFIG.bloomRadius, CONFIG.bloomThreshold
+        );
+        
+        composer = new THREE.EffectComposer(renderer);
+        composer.addPass(renderPass);
+        composer.addPass(bloomPass);
+        console.log("Bloom initialized successfully.");
+    } catch (e) {
+        console.warn("Bloom failed to init (Hardware limitation?), disabling.", e);
+        STATE.bloomEnabled = false;
+        document.getElementById('btn-bloom').classList.remove('active');
+        document.getElementById('btn-bloom').style.opacity = '0.5';
+        composer = null;
+    }
+}
+initBloom();
+
+function getParticleTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 32; canvas.height = 32;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    grad.addColorStop(0.4, 'rgba(200, 220, 255, 0.6)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 32, 32);
+    return new THREE.CanvasTexture(canvas);
+}
+
+const geometry = new THREE.BufferGeometry();
+const positions = new Float32Array(CONFIG.particleCount * 3);
+const colors = new Float32Array(CONFIG.particleCount * 3);
+const colorObj = new THREE.Color();
+
+for (let i = 0; i < CONFIG.particleCount; i++) {
+    positions[i * 3] = (Math.random() - 0.5) * 100;
+    positions[i * 3 + 1] = (Math.random() - 0.5) * 100;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 100;
+
+    colorObj.setHSL(Math.random(), 0.8, 0.5);
+    colors[i * 3] = colorObj.r;
+    colors[i * 3 + 1] = colorObj.g;
+    colors[i * 3 + 2] = colorObj.b;
+}
+
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+const material = new THREE.PointsMaterial({
+    size: CONFIG.baseSize,
+    map: getParticleTexture(),
+    transparent: true,
+    opacity: 0.9,
+    vertexColors: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    sizeAttenuation: true
+});
+
+const particles = new THREE.Points(geometry, material);
+scene.add(particles);
+
+const bgGeo = new THREE.BufferGeometry();
+const bgPos = new Float32Array(CONFIG.bgParticleCount * 3);
+for(let i=0; i<CONFIG.bgParticleCount*3; i++) bgPos[i] = (Math.random()-0.5)*200;
+bgGeo.setAttribute('position', new THREE.BufferAttribute(bgPos, 3));
+const bgParticles = new THREE.Points(bgGeo, new THREE.PointsMaterial({
+    size: 0.4, color: 0x445588, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending
+}));
+scene.add(bgParticles);
+
+const shapes = {};
+function generateShapes() {
+    const count = CONFIG.particleCount; const PI = Math.PI;
+
+    function pt(r) {
+        const t = Math.random() * PI * 2; const p = Math.acos((Math.random() * 2) - 1);
+        return [r * Math.sin(p) * Math.cos(t), r * Math.sin(p) * Math.sin(t), r * Math.cos(p)];
+    }
+
+    function addShape(name, fn) {
+        shapes[name] = [];
+        for(let i=0; i<count; i++) {
+            shapes[name].push(...(fn(i, count) || pt(10)));
+        }
+    }
+
+    shapes.sphere = []; for (let i = 0; i < count; i++) shapes.sphere.push(...pt(12));
+    shapes.chaos = []; for (let i = 0; i < count; i++) shapes.chaos.push(...pt(Math.random() * 22));
+    shapes.cube = []; for(let i=0; i<count; i++) { const s = 18; shapes.cube.push((Math.random()-0.5)*s, (Math.random()-0.5)*s, (Math.random()-0.5)*s); }
+
+    shapes.heart = [];
+    for (let i = 0; i < count; i++) {
+        const t = Math.random() * PI * 2; const r = Math.random();
+        const x = 16 * Math.pow(Math.sin(t), 3);
+        const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+        shapes.heart.push(x*0.6*Math.sqrt(r), y*0.6*Math.sqrt(r), (Math.random()-0.5)*5*Math.sqrt(r));
+    }
+
+    shapes.torus = [];
+    for (let i = 0; i < count; i++) {
+        const u = Math.random() * PI * 2; const v = Math.random() * PI * 2;
+        shapes.torus.push((10 + 3.5 * Math.cos(v)) * Math.cos(u), (10 + 3.5 * Math.cos(v)) * Math.sin(u), 3.5 * Math.sin(v));
+    }
+
+    shapes.dna = [];
+    for(let i=0; i<count; i++) {
+        const t = (i / count) * PI * 25 - PI * 12.5; const r = 6; const o = (i % 2 === 0) ? 0 : PI;
+        let x = r * Math.cos(t + o); let y = t * 1.5; let z = r * Math.sin(t + o);
+        if (Math.random() > 0.85) { x *= Math.random(); z *= Math.random(); } 
+        shapes.dna.push(x, y, z);
+    }
+
+    const simpleShapes = {
+        'mobius': () => { const u=Math.random()*PI*2; const v=Math.random()*2-1; const R=9; return [(R+v*Math.cos(u/2))*Math.cos(u), (R+v*Math.cos(u/2))*Math.sin(u), v*Math.sin(u/2)*3]; },
+        'galaxy': (i) => { const a=5; const ai=i%a; const r=Math.random()*20; const t=r*0.6+(ai*2*PI/a); return [r*Math.cos(t), (Math.random()-0.5)*(22-r)*0.3, r*Math.sin(t)]; },
+        'atom': () => (Math.random()<0.15) ? pt(3) : [14*Math.cos(Math.random()*PI*2), (Math.random()-0.5), 14*Math.sin(Math.random()*PI*2)], 
+        'pyramid': () => { const h=Math.random()*18-9; const r=(9-h)/1.4; return [(Math.random()-0.5)*2*r, h, (Math.random()-0.5)*2*r]; },
+        'tunnel': (i) => [Math.cos(i)*10 + (Math.random()-0.5)*2, Math.sin(i)*10 + (Math.random()-0.5)*2, (Math.random()-0.5)*80],
+        'wave': (i) => { const s=Math.sqrt(count); return [(i%s-s/2)*0.8, Math.sin((i%s)*0.15 + Math.floor(i/s)*0.15)*5, (Math.floor(i/s)-s/2)*0.8]; },
+        'cylinder': () => { const t=Math.random()*PI*2; return [7*Math.cos(t), (Math.random()-0.5)*24, 7*Math.sin(t)]; },
+        'hourglass': () => { const y=(Math.random()-0.5)*20; const r=Math.abs(y)*0.7+0.5; const t=Math.random()*PI*2; return [r*Math.cos(t), y, r*Math.sin(t)]; },
+        'cone': () => { const h=Math.random()*16-8; const r=(8-h)*0.8; const t=Math.random()*PI*2; return [r*Math.cos(t), h, r*Math.sin(t)]; },
+        'ring': () => { const t=Math.random()*PI*2; const r=14+(Math.random()-0.5)*3; return [r*Math.cos(t), (Math.random()-0.5)*1.5, r*Math.sin(t)]; },
+        'cross': () => (Math.random()>0.5) ? [(Math.random()-0.5)*5, (Math.random()-0.5)*24, (Math.random()-0.5)*5] : [(Math.random()-0.5)*24, (Math.random()-0.5)*5, (Math.random()-0.5)*5],
+        'grid': (i) => { const s=Math.cbrt(count); const d=22/s; return [(i%s-s/2)*d, (Math.floor((i/s)%s)-s/2)*d, (Math.floor(i/(s*s))-s/2)*d]; },
+        'lotus': () => { const u=Math.random()*PI*2; const v=Math.random()*PI; const r=9*(1+0.5*Math.sin(5*u)*Math.sin(v)); return [r*Math.sin(v)*Math.cos(u), r*Math.cos(v)-6, r*Math.sin(v)*Math.sin(u)]; },
+        'saturn': () => (Math.random()>0.6) ? [ (14+Math.random()*6)*Math.cos(Math.random()*PI*2), (Math.random()-0.5)*0.6, (14+Math.random()*6)*Math.sin(Math.random()*PI*2) ] : pt(8),
+        'mushroom': () => (Math.random()>0.3) ? [10*Math.sin(Math.random()*PI/2)*Math.cos(Math.random()*PI*2), 10*Math.cos(Math.random()*PI/2)+3, 10*Math.sin(Math.random()*PI/2)*Math.sin(Math.random()*PI*2)] : [3*Math.cos(Math.random()*PI*2), Math.random()*12-9, 3*Math.sin(Math.random()*PI*2)],
+        'star': () => { const t=Math.random()*PI*2; const p=Math.acos(2*Math.random()-1); const l=10+6*(Math.sin(5*t)*Math.sin(5*p)); const r=Math.random()*l; return [r*Math.sin(p)*Math.cos(t), r*Math.sin(p)*Math.sin(t), r*Math.cos(p)]; },
+        'diamond': () => { const x=Math.random()-0.5; const y=Math.random()-0.5; const z=Math.random()-0.5; const s=14/(Math.abs(x)+Math.abs(y)+Math.abs(z)); return [x*s, y*s, z*s]; },
+        'shell': () => { const t=Math.random()*PI*4; const r=Math.exp(t*0.2); return [r*Math.cos(t*3), t*2-6, r*Math.sin(t*3)]; },
+        'vortex': () => { const h=(Math.random()-0.5)*24; const r=Math.abs(h)+1; const t=h*2.5; return [r*Math.cos(t), h, r*Math.sin(t)]; },
+        'infinity': () => { const t=Math.random()*PI*2; const s=12/(1+Math.sin(t)**2); return [s*Math.cos(t), s*Math.sin(t)*Math.cos(t), (Math.random()-0.5)*3]; },
+        'cloud': () => [(Math.random()-0.5)*30, (Math.random()-0.5)*10, (Math.random()-0.5)*20],
+        'blackhole': () => { const t=Math.random()*PI*2; const r=5+15*Math.random(); const y = -15/r; return [r*Math.cos(t), y, r*Math.sin(t)]; },
+        'rain': () => [(Math.random()-0.5)*30, Math.random()*30-15, (Math.random()-0.5)*30],
+        'nebula': () => pt(Math.random()*5 + 10),
+
+        'klein': () => { const u=Math.random()*PI; const v=Math.random()*2*PI; const s=4; return [s*(Math.cos(u/2)*Math.cos(v)-Math.sin(u/2)*Math.sin(2*v)), s*(Math.sin(u/2)*Math.cos(v)+Math.cos(u/2)*Math.sin(2*v)), s*Math.cos(u)*(1+Math.sin(v))].map(x=>x*0.6); },
+        'roman': () => { const u=Math.random()*PI; const v=Math.random()*PI; const r=10; return [r*Math.sin(2*u)*Math.pow(Math.sin(v),2), r*Math.sin(u)*Math.cos(2*v), r*Math.cos(u)*Math.sin(2*v)]; },
+        'corkscrew': (i) => { const t = i*0.05; return [Math.cos(t)*5, (i/count)*30-15, Math.sin(t)*5]; },
+        'spring': (i) => { const t = i*0.1; return [(6+Math.cos(t*4))*Math.cos(t), (i/count)*24-12, (6+Math.cos(t*4))*Math.sin(t)]; },
+        'hyperboloid': () => { const u=(Math.random()-0.5)*4; const v=Math.random()*PI*2; const a=4, c=4; return [a*Math.cosh(u)*Math.cos(v), c*Math.sinh(u), a*Math.cosh(u)*Math.sin(v)]; },
+        'catenoid': () => { const u=(Math.random()-0.5)*3; const v=Math.random()*PI*2; const c=3; return [c*Math.cosh(u/c)*Math.cos(v), u*3, c*Math.cosh(u/c)*Math.sin(v)]; },
+        'snail': () => { const u=Math.random()*PI*6; const v=Math.random()*PI*2; const r=Math.exp(u*0.1); return [r*Math.cos(u)*Math.cos(v), r*Math.sin(u)*Math.cos(v), r*Math.sin(v)]; },
+        'astroid': () => { const t=Math.random()*PI*2; const p=Math.random()*PI; const r=12; return [r*Math.pow(Math.cos(t),3)*Math.pow(Math.sin(p),3), r*Math.pow(Math.sin(t),3)*Math.pow(Math.sin(p),3), r*Math.pow(Math.cos(p),3)]; },
+        'enneper': () => { const u=(Math.random()-0.5)*3; const v=(Math.random()-0.5)*3; return [u-u*u*u/3+u*v*v, v-v*v*v/3+v*u*u, u*u-v*v].map(x=>x*3); },
+        'pillow': () => { const u=Math.random()*PI; const v=Math.random()*PI*2; return [10*Math.cos(u), 10*Math.cos(v), 3*Math.sin(u)*Math.sin(v)]; },
+
+        'knot_2_3': () => knot(2,3), 'knot_3_2': () => knot(3,2), 'knot_3_4': () => knot(3,4),
+        'knot_4_3': () => knot(4,3), 'knot_2_5': () => knot(2,5), 'knot_5_2': () => knot(5,2),
+        'knot_3_5': () => knot(3,5), 'knot_5_3': () => knot(5,3), 'knot_4_5': () => knot(4,5),
+        'knot_7_3': () => knot(7,3),
+
+        'plane_warp': (i) => { const s=Math.sqrt(count); const x=(i%s-s/2)*0.8; const z=(Math.floor(i/s)-s/2)*0.8; return [x, Math.sin(x*0.2)*Math.cos(z*0.2)*5, z]; },
+        'cube_hollow': () => { const p = shapes.cube[Math.floor(Math.random()*shapes.cube.length/3)*3]; return [p, shapes.cube[Math.floor(Math.random()*count)*3+1], p*Math.random()]; }, // Glitchy
+        'explosion': () => { const r = Math.random(); return pt(r > 0.9 ? r * 20 : r * 5); },
+        'implosion': () => { const r = 15 + Math.random() * 15; return pt(r); },
+        'ring_wobble': () => { const t=Math.random()*PI*2; const r=12+2*Math.sin(t*8); return [r*Math.cos(t), 2*Math.cos(t*4), r*Math.sin(t)]; },
+        'cylinder_twist': (i) => { const t=Math.random()*PI*2; const h=(Math.random()-0.5)*20; const twist=h*0.5; return [7*Math.cos(t+twist), h, 7*Math.sin(t+twist)]; },
+        'sphere_spiky': () => { const p = pt(10); const l = Math.random()>0.95 ? 1.5 : 1; return [p[0]*l, p[1]*l, p[2]*l]; },
+        'double_helix': (i) => { const t=i*0.1; const s = (i%2===0)?1:-1; return [5*Math.cos(t), t/2-15, 5*Math.sin(t)+s*2]; },
+        'box_frame': () => { const s=15; const axis=Math.floor(Math.random()*3); const a=(Math.random()-0.5)*s; const b=(Math.random()-0.5)*s; const c=(Math.random()>0.5?1:-1)*s/2; return axis==0?[c,a,b]:(axis==1?[a,c,b]:[a,b,c]); },
+        'wall': () => [(Math.random()-0.5)*40, (Math.random()-0.5)*20, (Math.random()-0.5)*2],
+
+        'dome': () => { const p=pt(12); return [p[0], Math.abs(p[1]), p[2]]; },
+        'fan': () => { const t=Math.random()*PI*2; const r=Math.random()*15; return [r*Math.cos(t), Math.sin(t*4)*3, r*Math.sin(t)]; },
+        'flower_a': () => { const u=Math.random()*PI*2; const v=Math.random()*PI; const r=10*(1+0.3*Math.cos(4*u)); return [r*Math.sin(v)*Math.cos(u), r*Math.sin(v)*Math.sin(u), r*Math.cos(v)*0.5]; },
+        'flower_b': () => { const t=Math.random()*PI*2; const r=Math.random()*15 * Math.abs(Math.cos(t*2.5)); return [r*Math.cos(t), Math.random()*2, r*Math.sin(t)]; },
+        'tentacle': (i) => { const t=i*0.01; const r=Math.exp(-t*0.2)*10; return [r*Math.cos(t*5), t*4-10, r*Math.sin(t*5)]; },
+        'bowl': () => { const p=pt(10); return [p[0], p[1]*0.5-5, p[2]]; },
+        'saddle': () => { const x=(Math.random()-0.5)*10; const z=(Math.random()-0.5)*10; return [x, (x*x-z*z)*0.1, z]; },
+        'pipe': () => { const t=Math.random()*PI*2; return [5*Math.cos(t), (Math.random()-0.5)*30, 5*Math.sin(t)]; },
+        'beehive': () => { const t=Math.random()*PI*2; const h=(Math.random()-0.5)*10; const r=8+2*Math.cos(h*1.5); return [r*Math.cos(t), h*2, r*Math.sin(t)]; },
+        'droplet': () => { const p=pt(8); return [p[0]* (1-p[1]/16), p[1], p[2]* (1-p[1]/16)]; },
+
+        'galaxy_ring': () => { const t=Math.random()*PI*2; const r=15+(Math.random()-0.5)*2; return [r*Math.cos(t), (Math.random()-0.5), r*Math.sin(t)]; },
+        'quasar': () => { const r=Math.random(); return r<0.1 ? [(Math.random()-0.5)*60, 0, 0] : pt(2); },
+        'blackhole_disk': () => { const t=Math.random()*PI*2; const r=6+Math.random()*12; return [r*Math.cos(t), (r-6)*Math.sin(t*4)*0.1, r*Math.sin(t)]; },
+        'binary_star': () => { const o=(Math.random()>0.5)?5:-5; return [o + (Math.random()-0.5)*4, (Math.random()-0.5)*4, (Math.random()-0.5)*4]; },
+        'orbitals': () => { const t=Math.random()*PI*2; const r=5+Math.floor(Math.random()*4)*4; return [r*Math.cos(t), r*Math.sin(t)*Math.cos(t), (Math.random()-0.5)]; },
+        'warp_speed': () => [(Math.random()-0.5)*40, (Math.random()-0.5)*40, Math.random()*100],
+        'asteroid_belt': () => { const t=Math.random()*PI*2; const r=18+(Math.random()-0.5)*6; return [r*Math.cos(t), (Math.random()-0.5)*3, r*Math.sin(t)]; },
+        'comet': (i) => { const x=(i/count)*40 - 20; const y=Math.pow(x+20, 0.5); return [x, y*((Math.random()-0.5)), 0]; },
+        'supernova': () => { const r=Math.random()*20; const t=Math.random()*PI*2; const p=Math.random()*PI; return [r*Math.sin(p)*Math.cos(t), r*Math.sin(p)*Math.sin(t), r*Math.cos(p)]; },
+        'dark_matter': () => [(Math.random()-0.5)*50, (Math.random()-0.5)*50, (Math.random()-0.5)*50],
+
+        'triangle': () => { const r=Math.random(); const a=Math.random(); const b=Math.random(); if(a+b>1){return null}; const s=15; return [(a-0.5)*s, (b-0.5)*s, 0]; },
+        'square': () => [(Math.random()-0.5)*15, (Math.random()-0.5)*15, 0],
+        'circle_flat': () => { const t=Math.random()*PI*2; const r=Math.sqrt(Math.random())*10; return [r*Math.cos(t), r*Math.sin(t), 0]; },
+        'pentagon': () => { const t=Math.floor(Math.random()*5)*PI*2/5; const r=Math.random()*10; return [r*Math.cos(t), r*Math.sin(t), 0]; },
+        'hexagon': () => { const t=Math.floor(Math.random()*6)*PI*2/6; const r=Math.random()*10; return [r*Math.cos(t), r*Math.sin(t), 0]; },
+        'line_x': () => [(Math.random()-0.5)*30, 0, 0],
+        'line_y': () => [0, (Math.random()-0.5)*30, 0],
+        'line_z': () => [0, 0, (Math.random()-0.5)*30],
+        'corner': () => { const r=Math.random()*15; return Math.random()>0.5 ? [r,0,0] : (Math.random()>0.5 ? [0,r,0] : [0,0,r]); },
+        'grid_cylinder': (i) => { const y=(Math.floor(i/100)-150)*0.2; const t=(i%100)*PI*2/100; return [8*Math.cos(t), y, 8*Math.sin(t)]; },
+
+        'noise_ball': () => { const p=pt(10); return [p[0]+(Math.random()-0.5), p[1]+(Math.random()-0.5), p[2]+(Math.random()-0.5)]; },
+        'glitch_sphere': () => { const p=pt(10); if(Math.random()>0.9) p[0]*=2; return p; },
+        'layered_sphere': () => { const r=5 + Math.floor(Math.random()*3)*4; return pt(r); },
+        'cube_grid': (i) => { const s=Math.floor(Math.pow(count, 1/3)); const x=i%s; const y=Math.floor((i/s)%s); const z=Math.floor(i/(s*s)); const sp=1.5; return [(x-s/2)*sp, (y-s/2)*sp, (z-s/2)*sp]; },
+        'prism': () => { const t=Math.random()*PI*2; const h=(Math.random()-0.5)*10; const r=5+h*0.2; return [r*Math.cos(t), h, r*Math.sin(t)]; },
+        'twist_bar': (i) => { const y=(i/count)*20-10; const w=Math.sin(y)*2; return [w, y, 0]; },
+        'wobbly_plane': () => { const x=(Math.random()-0.5)*20; const z=(Math.random()-0.5)*20; return [x, Math.sin(x)*Math.cos(z), z]; },
+        'bumpy_sphere': () => { const p=pt(10); const l=1+0.2*Math.sin(p[0]*2)*Math.sin(p[1]*2); return [p[0]*l, p[1]*l, p[2]*l]; },
+        'spiky_donut': () => { const u=Math.random()*PI*2; const v=Math.random()*PI*2; const r=10+3*Math.cos(v) + (Math.random()>0.95?2:0); return [r*Math.cos(u), r*Math.sin(u), 3*Math.sin(v)]; },
+        'final_chaos': () => [(Math.random()-0.5)*Math.random()*50, (Math.random()-0.5)*Math.random()*50, (Math.random()-0.5)*Math.random()*50]
+    };
+
+    function knot(p, q) {
+        const t = Math.random() * PI * 2;
+        const r = 2 + Math.cos(q * t);
+        return [r * Math.cos(p * t) * 3, r * Math.sin(p * t) * 3, Math.sin(q * t) * 3];
+    }
+
+    for(let key in simpleShapes) {
+        addShape(key, simpleShapes[key]);
+    }
+}
+generateShapes();
+
+let analyser, dataArray;
+function initAudio() {
+    if (analyser) return;
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        STATE.audioEnabled = true;
+        document.getElementById('btn-audio').classList.add('active');
+        document.getElementById('btn-audio').innerText = "🎵 监听中";
+    }).catch(e => console.error("Audio denied", e));
+}
+
+const videoElement = document.getElementById('video-preview');
+let cameraUtils;
+
+function onResults(results) {
+    const statusEl = document.getElementById('status-gesture');
+    const tipEl = document.getElementById('camera-tip');
+    if (statusEl.innerHTML.includes("LOADING") || statusEl.innerHTML.includes("SLOW")) {
+        videoElement.classList.add('active');
+        tipEl.style.display = 'none';
+        document.getElementById('retry-cam-btn').style.display = 'none';
+    }
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        STATE.handDetected = true;
+        const lm = results.multiHandLandmarks[0];
+        const dist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+        
+        let target = (dist - 0.02) * 7;
+        STATE.targetScale = Math.max(0.1, Math.min(target, 2.5));
+
+        particles.rotation.y = (lm[9].x - 0.5) * 3;
+        particles.rotation.x = (lm[9].y - 0.5) * 3;
+
+        statusEl.innerText = "HAND DETECTED";
+        statusEl.className = "text-xs px-2 py-1 rounded bg-green-500/20 text-green-400 border border-green-500/30";
+    } else {
+        STATE.handDetected = false;
+        STATE.targetScale = 1;
+        statusEl.innerText = "WAITING HAND";
+        statusEl.className = "text-xs px-2 py-1 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30";
+    }
+}
+
+async function startCamera() {
+    try {
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5});
+        hands.onResults(onResults);
+
+        cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                if (videoElement.readyState >= 2) await hands.send({image: videoElement});
+            },
+            width: 320, height: 240
+        });
+        await cameraUtils.start();
+    } catch(e) {
+        console.warn("Camera init failed, using mouse fallback.", e);
+        document.getElementById('status-gesture').innerText = "CAMERA FAIL";
+        document.getElementById('camera-tip').innerText = "Camera failed, use mouse.";
+    }
+}
+
+setTimeout(startCamera, 1000);
+
+const shapesList = [
+    // 1-10
+    {id: 'sphere', icon: '🔵', n:'Sphere'}, {id: 'cube', icon: '🧊', n:'Cube'}, {id: 'heart', icon: '❤️', n:'Heart'}, {id: 'dna', icon: '🧬', n:'DNA'}, 
+    {id: 'galaxy', icon: '🌌', n:'Galaxy'}, {id: 'atom', icon: '⚛️', n:'Atom'}, {id: 'mobius', icon: '♾️', n:'Mobius'}, {id: 'torus', icon: '🍩', n:'Torus'},
+    {id: 'pyramid', icon: '📐', n:'Pyramid'}, {id: 'lotus', icon: '🪷', n:'Lotus'},
+    // 11-20
+    {id: 'star', icon: '⭐', n:'Star'}, {id: 'saturn', icon: '🪐', n:'Saturn'}, {id: 'vortex', icon: '🌪️', n:'Vortex'}, {id: 'wave', icon: '🌊', n:'Wave'},
+    {id: 'chaos', icon: '💥', n:'Chaos'}, {id: 'tunnel', icon: '🚇', n:'Tunnel'}, {id: 'diamond', icon: '💎', n:'Gem'}, {id: 'grid', icon: '🕸️', n:'Grid'},
+    {id: 'shell', icon: '🐚', n:'Shell'}, {id: 'hourglass', icon: '⏳', n:'Time'},
+    // 21-30
+    {id: 'ring', icon: '💍', n:'Ring'}, {id: 'cross', icon: '✝️', n:'Cross'}, {id: 'cone', icon: '🔺', n:'Cone'}, {id: 'cylinder', icon: '🔋', n:'Cylinder'},
+    {id: 'mushroom', icon: '🍄', n:'Shroom'}, {id: 'infinity', icon: '🔄', n:'Infinity'}, {id: 'cloud', icon: '☁️', n:'Cloud'}, {id: 'blackhole', icon: '🕳️', n:'Void'},
+    {id: 'rain', icon: '🌧️', n:'Rain'}, {id: 'nebula', icon: '✨', n:'Nebula'},
+    // 31-40 (Surfaces)
+    {id: 'klein', icon: '🏺', n:'Klein'}, {id: 'roman', icon: '🛡️', n:'Roman'}, {id: 'corkscrew', icon: '🔩', n:'Screw'}, {id: 'spring', icon: '🌀', n:'Spring'},
+    {id: 'hyperboloid', icon: '⌛', n:'Hyper'}, {id: 'catenoid', icon: '🥣', n:'Catenoid'}, {id: 'snail', icon: '🐌', n:'Snail'}, {id: 'astroid', icon: '✴️', n:'Astroid'},
+    {id: 'enneper', icon: '📜', n:'Enneper'}, {id: 'pillow', icon: '🛌', n:'Pillow'},
+    // 41-50 (Knots)
+    {id: 'knot_2_3', icon: '🎗️', n:'Knot 2-3'}, {id: 'knot_3_2', icon: '🎗️', n:'Knot 3-2'}, {id: 'knot_3_4', icon: '🎗️', n:'Knot 3-4'}, {id: 'knot_4_3', icon: '🎗️', n:'Knot 4-3'},
+    {id: 'knot_2_5', icon: '🎗️', n:'Knot 2-5'}, {id: 'knot_5_2', icon: '🎗️', n:'Knot 5-2'}, {id: 'knot_3_5', icon: '🎗️', n:'Knot 3-5'}, {id: 'knot_5_3', icon: '🎗️', n:'Knot 5-3'},
+    {id: 'knot_4_5', icon: '🎗️', n:'Knot 4-5'}, {id: 'knot_7_3', icon: '🎗️', n:'Knot 7-3'},
+    // 51-60 (Abstract)
+    {id: 'plane_warp', icon: '📃', n:'Warp'}, {id: 'cube_hollow', icon: '🔲', n:'Hollow'}, {id: 'explosion', icon: '🎇', n:'Boom'}, {id: 'implosion', icon: '🎆', n:'Implode'},
+    {id: 'ring_wobble', icon: '💿', n:'Wobble'}, {id: 'cylinder_twist', icon: '🌪️', n:'Twist'}, {id: 'sphere_spiky', icon: '🐡', n:'Spiky'}, {id: 'double_helix', icon: '🧬', n:'Helix 2'},
+    {id: 'box_frame', icon: '🖼️', n:'Frame'}, {id: 'wall', icon: '🧱', n:'Wall'},
+    // 61-70 (Nature 2)
+    {id: 'dome', icon: '🕌', n:'Dome'}, {id: 'fan', icon: '☢️', n:'Fan'}, {id: 'flower_a', icon: '🌸', n:'Flora A'}, {id: 'flower_b', icon: '🌻', n:'Flora B'},
+    {id: 'tentacle', icon: '🦑', n:'Tentacle'}, {id: 'bowl', icon: '🥣', n:'Bowl'}, {id: 'saddle', icon: '🐎', n:'Saddle'}, {id: 'pipe', icon: '🦯', n:'Pipe'},
+    {id: 'beehive', icon: '🐝', n:'Hive'}, {id: 'droplet', icon: '💧', n:'Drop'},
+    // 71-80 (Cosmic 2)
+    {id: 'galaxy_ring', icon: '⭕', n:'Ring Gal'}, {id: 'quasar', icon: '⚡', n:'Quasar'}, {id: 'blackhole_disk', icon: '⚫', n:'Accretion'}, {id: 'binary_star', icon: '♊', n:'Binary'},
+    {id: 'orbitals', icon: '⚛️', n:'Orbitals'}, {id: 'warp_speed', icon: '🚀', n:'Warp'}, {id: 'asteroid_belt', icon: '☄️', n:'Belt'}, {id: 'comet', icon: '🌠', n:'Comet'},
+    {id: 'supernova', icon: '💥', n:'Nova'}, {id: 'dark_matter', icon: '🌫️', n:'Dark M'},
+    // 81-90 (Geometry)
+    {id: 'triangle', icon: '🔺', n:'Tri'}, {id: 'square', icon: '🟥', n:'Square'}, {id: 'circle_flat', icon: '⚪', n:'Circle'}, {id: 'pentagon', icon: '⬟', n:'Penta'},
+    {id: 'hexagon', icon: '⬡', n:'Hexa'}, {id: 'line_x', icon: '➖', n:'Ln X'}, {id: 'line_y', icon: '➖', n:'Ln Y'}, {id: 'line_z', icon: '➖', n:'Ln Z'},
+    {id: 'corner', icon: '📐', n:'Corner'}, {id: 'grid_cylinder', icon: '🛢️', n:'Grid Cyl'},
+    // 91-100 (Experim)
+    {id: 'noise_ball', icon: '🧶', n:'Noise'}, {id: 'glitch_sphere', icon: '👾', n:'Glitch'}, {id: 'layered_sphere', icon: '🧅', n:'Layers'}, {id: 'cube_grid', icon: '🔢', n:'Voxels'},
+    {id: 'prism', icon: '💎', n:'Prism'}, {id: 'twist_bar', icon: '🥖', n:'Bar'}, {id: 'wobbly_plane', icon: '〰️', n:'Wibble'}, {id: 'bumpy_sphere', icon: '🍋', n:'Bump'},
+    {id: 'spiky_donut', icon: '🍩', n:'Spiky T'}, {id: 'final_chaos', icon: '🐉', n:'Final'}
+];
+
+const btnBox = document.getElementById('shape-buttons');
+shapesList.forEach(s => {
+    const b = document.createElement('button');
+    b.className = `btn ${s.id==='sphere'?'active':''} justify-center text-[10px] py-2`;
+    b.innerHTML = `<span class="opacity-80">${s.icon}</span> ${s.n}`;
+    b.onclick = () => {
+        STATE.currentShape = s.id;
+        document.querySelectorAll('#shape-buttons .btn').forEach(btn=>btn.classList.remove('active'));
+        b.classList.add('active');
+    };
+    btnBox.appendChild(b);
+});
+
+document.getElementById('size-slider').oninput = (e) => {
+    material.size = parseFloat(e.target.value);
+    document.getElementById('size-val').innerText = e.target.value;
+};
+document.getElementById('color-picker').oninput = (e) => {
+
+};
+document.getElementById('btn-audio').onclick = initAudio;
+document.getElementById('btn-bloom').onclick = function() {
+    STATE.bloomEnabled = !STATE.bloomEnabled;
+    this.classList.toggle('active');
+};
+document.getElementById('btn-fullscreen').onclick = () => {
+    if(!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+    else document.exitFullscreen().catch(()=>{});
+};
+document.getElementById('btn-snapshot').onclick = () => {
+    renderer.render(scene, camera);
+    const link = document.createElement('a');
+    link.download = 'neon-particles.png';
+    link.href = renderer.domElement.toDataURL('image/png');
+    link.click();
+};
+
+window.addEventListener('mousemove', (e) => {
+    STATE.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    STATE.mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    if (!STATE.handDetected) {
+        particles.rotation.x += e.movementY * 0.001;
+        particles.rotation.y += e.movementX * 0.001;
+    }
+});
+
+const clock = new THREE.Clock();
+let frameCount = 0;
+let lastTime = 0;
+const fpsElem = document.getElementById('fps-counter');
+
+function animate() {
+    requestAnimationFrame(animate);
+    
+    const delta = clock.getDelta();
+    STATE.time += delta;
+
+    frameCount++;
+    if(STATE.time - lastTime >= 1) {
+        fpsElem.innerText = frameCount;
+        frameCount = 0;
+        lastTime = STATE.time;
+    }
+
+    STATE.currentScale += (STATE.targetScale - STATE.currentScale) * CONFIG.handInfluenceSpeed;
+
+    let audioAmp = 0;
+    if(STATE.audioEnabled && analyser) {
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+        audioAmp = sum / dataArray.length / 255;
+    }
+
+    const pos = particles.geometry.attributes.position.array;
+    const col = particles.geometry.attributes.color.array;
+    const target = shapes[STATE.currentShape] || shapes.sphere;
+
+    const baseColorHex = document.getElementById('color-picker').value;
+    const baseCol = new THREE.Color(baseColorHex);
+    const baseHSL = {};
+    baseCol.getHSL(baseHSL);
+
+    STATE.hueOffset += 0.002;
+
+    for(let i=0; i<CONFIG.particleCount; i++) {
+        const i3 = i * 3;
+        let tx = target[i3], ty = target[i3+1], tz = target[i3+2];
+
+        if (isNaN(tx)) { tx=0; ty=0; tz=0; }
+
+        tx *= STATE.currentScale; ty *= STATE.currentScale; tz *= STATE.currentScale;
+
+        if(STATE.audioEnabled) {
+            const beat = 1 + audioAmp * CONFIG.audioSensitivity * (1 - Math.abs(ty)/25); 
+            tx *= beat; ty *= beat; tz *= beat;
+        } else {
+            const breathe = 1 + Math.sin(STATE.time * 2) * 0.03;
+            tx *= breathe; ty *= breathe; tz *= breathe;
+        }
+
+        pos[i3] += (tx - pos[i3]) * CONFIG.morphSpeed;
+        pos[i3+1] += (ty - pos[i3+1]) * CONFIG.morphSpeed;
+        pos[i3+2] += (tz - pos[i3+2]) * CONFIG.morphSpeed;
+
+        const dist = Math.sqrt(tx*tx + ty*ty + tz*tz);
+        let h = baseHSL.h + STATE.hueOffset + (dist * 0.015); 
+        let s = 0.8; 
+        let l = 0.5 + Math.sin(STATE.time * 4 + i) * 0.15;
+        if(STATE.audioEnabled) l += audioAmp * 0.4; 
+
+        colorObj.setHSL(h % 1, s, l);
+        col[i3] = colorObj.r; col[i3+1] = colorObj.g; col[i3+2] = colorObj.b;
+    }
+
+    particles.geometry.attributes.position.needsUpdate = true;
+    particles.geometry.attributes.color.needsUpdate = true;
+
+    if(!STATE.handDetected) {
+        particles.rotation.y += 0.002;
+        bgParticles.rotation.y -= 0.0005; 
+    }
+
+    try {
+        if(STATE.bloomEnabled && composer) {
+            composer.render();
+        } else {
+            renderer.render(scene, camera);
+        }
+    } catch(e) {
+        console.warn("Render Guard: Bloom crashed! Disabling bloom to prevent black screen.", e);
+        STATE.bloomEnabled = false;
+        document.getElementById('btn-bloom').classList.remove('active');
+        renderer.render(scene, camera);
+    }
+}
+
+animate();
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    if(composer) composer.setSize(window.innerWidth, window.innerHeight);
+});
+
+</script>
+</body>
+</html>
