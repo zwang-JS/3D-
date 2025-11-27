@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D 手势粒子系统 - 移动适配版</title>
+    
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+
+    <!-- 引入 Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <!-- 引入 Post-Processing (辉光效果) -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+    <!-- 引入 MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000000; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; -webkit-tap-highlight-color: transparent; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        
+        /* UI 层级 */
+        #ui-layer { position: absolute; z-index: 10; pointer-events: none; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-between; padding: 16px; box-sizing: border-box; }
+        .pointer-events-auto { pointer-events: auto; }
+        
+        /* 摄像头预览 - 移动端缩小一点 */
+        #video-preview { 
+            position: absolute; bottom: 20px; right: 20px; width: 100px; height: 133px; /* 4:3 portrait */
+            border-radius: 12px; border: 2px solid rgba(255,255,255,0.2); 
+            transform: scaleX(-1); /* 镜像 */
+            background: #000;
+            object-fit: cover;
+            opacity: 0.6;
+            transition: opacity 0.3s;
+            box-shadow: 0 0 15px rgba(99, 102, 241, 0.5);
+            display: none; 
+            z-index: 20;
+        }
+        #video-preview.active { display: block; }
+        
+        /* 玻璃拟态 UI */
+        .glass-panel {
+            background: rgba(10, 10, 10, 0.75);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+            transition: all 0.3s ease;
+        }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: #ddd;
+            font-size: 0.8rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            white-space: nowrap;
+        }
+        .btn:active, .btn:hover { background: rgba(255, 255, 255, 0.2); transform: scale(0.98); color: #fff; }
+        .btn.active { background: rgba(99, 102, 241, 0.3); border-color: #6366f1; color: #818cf8; }
+
+        input[type="range"] { accent-color: #6366f1; }
+        
+        /* 移动端优化滚动条 */
+        .custom-scroll::-webkit-scrollbar { width: 3px; }
+        .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+
+        #loader {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 100;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            transition: opacity 0.8s ease;
+            pointer-events: none;
+        }
+        .spinner {
+            width: 50px; height: 50px; border: 3px solid rgba(255,255,255,0.1);
+            border-radius: 50%; border-top-color: #818cf8;
+            animation: spin 1s cubic-bezier(0.68, -0.55, 0.27, 1.55) infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        /* 移动端控制面板切换 */
+        #controls-panel {
+            transition: transform 0.3s ease-in-out, opacity 0.3s;
+        }
+        .panel-hidden {
+            transform: translateX(-120%);
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        #retry-cam-btn {
+            display: none; margin-top: 5px; background: #ef4444; color: white;
+            font-size: 10px; padding: 4px 8px; border-radius: 4px; cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 加载层 -->
+    <div id="loader">
+        <div class="spinner"></div>
+        <p class="mt-4 text-gray-300 font-light tracking-widest text-sm">LOADING SYSTEM</p>
+    </div>
+
+    <!-- 3D 容器 -->
+    <div id="canvas-container"></div>
+
+    <!-- UI 层 -->
+    <div id="ui-layer">
+        <!-- 顶部功能区 -->
+        <div class="flex justify-between items-start pointer-events-auto w-full">
+            <div class="glass-panel border-l-4 border-indigo-500 py-2 px-3">
+                <h1 class="text-lg font-black italic bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-300 to-cyan-300">
+                    NEON
+                </h1>
+            </div>
+
+            <!-- 控制面板开关 (移动端) -->
+            <button id="toggle-controls" class="glass-panel p-2 md:hidden text-white">
+                ⚙️
+            </button>
+
+            <!-- 桌面端按钮组 -->
+            <div class="glass-panel hidden md:flex gap-2">
+                <button id="btn-audio" class="btn">🎵 律动</button>
+                <button id="btn-bloom" class="btn active">✨ 辉光</button>
+                <button id="btn-fullscreen" class="btn">⛶ 全屏</button>
+                <button id="btn-snapshot" class="btn">📸 截图</button>
+            </div>
+        </div>
+
+        <!-- 移动端按钮组 (放在底部或者合并进面板) -->
+        <div class="md:hidden flex gap-2 pointer-events-auto mt-2 overflow-x-auto pb-2 custom-scroll absolute top-14 right-4 max-w-[60%] justify-end">
+             <button id="btn-audio-m" class="btn text-xs px-2 py-1 bg-black/50 backdrop-blur">🎵</button>
+             <button id="btn-bloom-m" class="btn active text-xs px-2 py-1 bg-black/50 backdrop-blur">✨</button>
+             <button id="btn-fs-m" class="btn text-xs px-2 py-1 bg-black/50 backdrop-blur">⛶</button>
+        </div>
+
+        <!-- 左侧面板：模型与参数 (移动端默认隐藏) -->
+        <div id="controls-panel" class="absolute top-20 left-4 glass-panel w-64 pointer-events-auto flex flex-col gap-3 max-h-[65vh] overflow-hidden border border-white/5 panel-hidden md:transform-none md:opacity-100 md:block">
+            
+            <!-- 30个模型选择区 -->
+            <div class="flex-1 overflow-y-auto custom-scroll pr-1">
+                <label class="text-[10px] uppercase text-indigo-300/80 font-bold mb-2 block sticky top-0 bg-[#0a0a0a]/90 backdrop-blur-md z-10 py-1 border-b border-white/5">
+                    Select Shape
+                </label>
+                <div class="grid grid-cols-2 gap-1.5" id="shape-buttons">
+                    <!-- JS 生成 -->
+                </div>
+            </div>
+
+            <div class="h-px bg-white/10 w-full"></div>
+
+            <!-- 控制区 -->
+            <div class="flex-shrink-0">
+                <div class="mb-3">
+                     <div class="flex justify-between text-xs text-gray-400 mb-1">
+                        <span>Size</span>
+                        <span id="size-val">0.12</span>
+                    </div>
+                    <input type="range" id="size-slider" min="0.01" max="0.4" step="0.01" value="0.12" class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-400">Color</span>
+                    <input type="color" id="color-picker" value="#6366f1" class="bg-transparent border-0 w-6 h-6 cursor-pointer rounded overflow-hidden">
+                </div>
+            </div>
+            
+            <div class="h-px bg-white/10 w-full"></div>
+
+            <!-- 状态区 -->
+            <div class="flex-shrink-0">
+                <div class="flex justify-between items-end">
+                    <div class="text-[10px] text-gray-500 font-mono">
+                        <div>FPS: <span id="fps-counter" class="text-green-400">--</span></div>
+                        <div>CNT: <span id="particle-count-display" class="text-indigo-400">--</span></div>
+                    </div>
+                    <div class="flex flex-col items-end">
+                        <div id="status-gesture" class="text-[10px] px-2 py-1 rounded bg-yellow-500/20 text-yellow-300 border border-yellow-500/30">
+                            LOADING AI...
+                        </div>
+                        <button id="retry-cam-btn">Start Cam</button>
+                    </div>
+                </div>
+                <div id="camera-tip" class="text-[9px] text-gray-500 mt-1 text-right max-w-[120px]">
+                    * AI 加载中...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 确保 autoplay playsinline muted 属性以支持iOS自动播放 -->
+    <video id="video-preview" class="pointer-events-auto" autoplay playsinline muted></video>
+
+<script>
+/**
+ * 移动适配版
+ * 1. 检测 isMobile，减少粒子数到 12000。
+ * 2. 增加 touchmove 事件支持触摸控制。
+ * 3. 摄像头请求增加 HTTPS 检测和错误提示。
+ * 4. UI 响应式调整。
+ */
+
+// --- 0. 环境检测 ---
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+// 移动端默认隐藏面板
+if(isMobile) {
+    document.getElementById('controls-panel').classList.add('panel-hidden');
+} else {
+    document.getElementById('controls-panel').classList.remove('panel-hidden');
+}
+
+// 快速进入逻辑
+setTimeout(() => {
+    const loader = document.getElementById('loader');
+    if (loader) loader.style.opacity = '0';
+    setTimeout(() => { if(loader) loader.style.display = 'none'; }, 800);
+}, 1500);
+
+// --- 1. 配置 (自适应) ---
+const CONFIG = {
+    particleCount: isMobile ? 12000 : 30000, // 手机降级以保证流畅
+    bgParticleCount: isMobile ? 800 : 2000,
+    baseSize: isMobile ? 0.18 : 0.12,        // 手机上粒子稍微大一点
+    morphSpeed: 0.08,
+    handInfluenceSpeed: 0.15,
+    audioSensitivity: 2.0,
+    bloomStrength: isMobile ? 0.8 : 1.2,     // 手机上辉光弱一点
+    bloomRadius: 0.5,
+    bloomThreshold: 0.15
+};
+
+document.getElementById('particle-count-display').innerText = (CONFIG.particleCount / 1000).toFixed(1) + 'k';
+
+const STATE = {
+    currentShape: 'sphere',
+    targetScale: 1,
+    currentScale: 1,
+    handDetected: false,
+    audioEnabled: false,
+    bloomEnabled: true,
+    hueOffset: 0,
+    mouse: new THREE.Vector2(-9999, -9999),
+    time: 0
+};
+
+// --- 2. 场景初始化 ---
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020205); 
+scene.fog = new THREE.FogExp2(0x020205, 0.02);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = isMobile ? 35 : 28; // 手机屏幕窄，相机拉远一点
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+container.appendChild(renderer.domElement);
+
+// --- 3. 辉光系统 ---
+let composer;
+let renderPass, bloomPass;
+
+function initBloom() {
+    try {
+        if (typeof THREE.EffectComposer === 'undefined') throw new Error("No Composer Lib");
+        
+        renderPass = new THREE.RenderPass(scene, camera);
+        bloomPass = new THREE.UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            CONFIG.bloomStrength, CONFIG.bloomRadius, CONFIG.bloomThreshold
+        );
+        
+        composer = new THREE.EffectComposer(renderer);
+        composer.addPass(renderPass);
+        composer.addPass(bloomPass);
+    } catch (e) {
+        console.warn("Bloom disabled:", e);
+        STATE.bloomEnabled = false;
+        toggleBloomUI(false);
+        composer = null;
+    }
+}
+initBloom();
+
+// --- 4. 粒子系统 ---
+function getParticleTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 32; canvas.height = 32;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    grad.addColorStop(0.4, 'rgba(200, 220, 255, 0.6)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 32, 32);
+    return new THREE.CanvasTexture(canvas);
+}
+
+const geometry = new THREE.BufferGeometry();
+const positions = new Float32Array(CONFIG.particleCount * 3);
+const colors = new Float32Array(CONFIG.particleCount * 3);
+const colorObj = new THREE.Color();
+
+for (let i = 0; i < CONFIG.particleCount; i++) {
+    positions[i * 3] = (Math.random() - 0.5) * 100;
+    positions[i * 3 + 1] = (Math.random() - 0.5) * 100;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 100;
+
+    colorObj.setHSL(Math.random(), 0.8, 0.5);
+    colors[i * 3] = colorObj.r;
+    colors[i * 3 + 1] = colorObj.g;
+    colors[i * 3 + 2] = colorObj.b;
+}
+
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+const material = new THREE.PointsMaterial({
+    size: CONFIG.baseSize,
+    map: getParticleTexture(),
+    transparent: true,
+    opacity: 0.9,
+    vertexColors: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    sizeAttenuation: true
+});
+
+const particles = new THREE.Points(geometry, material);
+scene.add(particles);
+
+// 背景星尘
+const bgGeo = new THREE.BufferGeometry();
+const bgPos = new Float32Array(CONFIG.bgParticleCount * 3);
+for(let i=0; i<CONFIG.bgParticleCount*3; i++) bgPos[i] = (Math.random()-0.5)*200;
+bgGeo.setAttribute('position', new THREE.BufferAttribute(bgPos, 3));
+const bgParticles = new THREE.Points(bgGeo, new THREE.PointsMaterial({
+    size: 0.4, color: 0x445588, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending
+}));
+scene.add(bgParticles);
+
+// --- 5. 形状生成 ---
+const shapes = {};
+function generateShapes() {
+    const count = CONFIG.particleCount; const PI = Math.PI;
+    function pt(r) {
+        const t = Math.random() * PI * 2; const p = Math.acos((Math.random() * 2) - 1);
+        return [r * Math.sin(p) * Math.cos(t), r * Math.sin(p) * Math.sin(t), r * Math.cos(p)];
+    }
+
+    shapes.sphere = []; for (let i = 0; i < count; i++) shapes.sphere.push(...pt(12));
+    shapes.chaos = []; for (let i = 0; i < count; i++) shapes.chaos.push(...pt(Math.random() * 22));
+    shapes.cube = []; for(let i=0; i<count; i++) { const s = 18; shapes.cube.push((Math.random()-0.5)*s, (Math.random()-0.5)*s, (Math.random()-0.5)*s); }
+    
+    shapes.heart = [];
+    for (let i = 0; i < count; i++) {
+        const t = Math.random() * PI * 2; const r = Math.random();
+        const x = 16 * Math.pow(Math.sin(t), 3);
+        const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+        shapes.heart.push(x*0.6*Math.sqrt(r), y*0.6*Math.sqrt(r), (Math.random()-0.5)*5*Math.sqrt(r));
+    }
+    
+    shapes.galaxy = [];
+    for(let i=0; i<count; i++) {
+        const a=5; const ai=i%a; const r=Math.random()*20; const t=r*0.6+(ai*2*PI/a); 
+        shapes.galaxy.push(r*Math.cos(t), (Math.random()-0.5)*(22-r)*0.3, r*Math.sin(t)); 
+    }
+
+    shapes.dna = [];
+    for(let i=0; i<count; i++) {
+        const t = (i / count) * PI * 25 - PI * 12.5; const r = 6; const o = (i % 2 === 0) ? 0 : PI;
+        let x = r * Math.cos(t + o); let y = t * 1.5; let z = r * Math.sin(t + o);
+        if (Math.random() > 0.85) { x *= Math.random(); z *= Math.random(); } 
+        shapes.dna.push(x, y, z);
+    }
+
+    // 简单填充其他
+    const simpleShapes = {
+        'mobius': () => { const u=Math.random()*PI*2; const v=Math.random()*2-1; const R=9; return [(R+v*Math.cos(u/2))*Math.cos(u), (R+v*Math.cos(u/2))*Math.sin(u), v*Math.sin(u/2)*3]; },
+        'atom': () => (Math.random()<0.15) ? pt(3) : [14*Math.cos(Math.random()*PI*2), (Math.random()-0.5), 14*Math.sin(Math.random()*PI*2)], 
+        'pyramid': () => { const h=Math.random()*18-9; const r=(9-h)/1.4; return [(Math.random()-0.5)*2*r, h, (Math.random()-0.5)*2*r]; },
+        'tunnel': (i) => [Math.cos(i)*10 + (Math.random()-0.5)*2, Math.sin(i)*10 + (Math.random()-0.5)*2, (Math.random()-0.5)*80],
+        'wave': (i) => { const s=Math.sqrt(count); return [(i%s-s/2)*0.8, Math.sin((i%s)*0.15 + Math.floor(i/s)*0.15)*5, (Math.floor(i/s)-s/2)*0.8]; },
+        'torus': () => { const u=Math.random()*PI*2; const v=Math.random()*PI*2; return [(10+3.5*Math.cos(v))*Math.cos(u), (10+3.5*Math.cos(v))*Math.sin(u), 3.5*Math.sin(v)]; },
+        'cylinder': () => { const t=Math.random()*PI*2; return [7*Math.cos(t), (Math.random()-0.5)*24, 7*Math.sin(t)]; },
+        'hourglass': () => { const y=(Math.random()-0.5)*20; const r=Math.abs(y)*0.7+0.5; const t=Math.random()*PI*2; return [r*Math.cos(t), y, r*Math.sin(t)]; },
+        'cone': () => { const h=Math.random()*16-8; const r=(8-h)*0.8; const t=Math.random()*PI*2; return [r*Math.cos(t), h, r*Math.sin(t)]; },
+        'ring': () => { const t=Math.random()*PI*2; const r=14+(Math.random()-0.5)*3; return [r*Math.cos(t), (Math.random()-0.5)*1.5, r*Math.sin(t)]; },
+        'cross': () => (Math.random()>0.5) ? [(Math.random()-0.5)*5, (Math.random()-0.5)*24, (Math.random()-0.5)*5] : [(Math.random()-0.5)*24, (Math.random()-0.5)*5, (Math.random()-0.5)*5],
+        'grid': (i) => { const s=Math.cbrt(count); const d=22/s; return [(i%s-s/2)*d, (Math.floor((i/s)%s)-s/2)*d, (Math.floor(i/(s*s))-s/2)*d]; },
+        'lotus': () => { const u=Math.random()*PI*2; const v=Math.random()*PI; const r=9*(1+0.5*Math.sin(5*u)*Math.sin(v)); return [r*Math.sin(v)*Math.cos(u), r*Math.cos(v)-6, r*Math.sin(v)*Math.sin(u)]; },
+        'saturn': () => (Math.random()>0.6) ? [ (14+Math.random()*6)*Math.cos(Math.random()*PI*2), (Math.random()-0.5)*0.6, (14+Math.random()*6)*Math.sin(Math.random()*PI*2) ] : pt(8),
+        'mushroom': () => (Math.random()>0.3) ? [10*Math.sin(Math.random()*PI/2)*Math.cos(Math.random()*PI*2), 10*Math.cos(Math.random()*PI/2)+3, 10*Math.sin(Math.random()*PI/2)*Math.sin(Math.random()*PI*2)] : [3*Math.cos(Math.random()*PI*2), Math.random()*12-9, 3*Math.sin(Math.random()*PI*2)],
+        'star': () => { const t=Math.random()*PI*2; const p=Math.acos(2*Math.random()-1); const l=10+6*(Math.sin(5*t)*Math.sin(5*p)); const r=Math.random()*l; return [r*Math.sin(p)*Math.cos(t), r*Math.sin(p)*Math.sin(t), r*Math.cos(p)]; },
+        'diamond': () => { const x=Math.random()-0.5; const y=Math.random()-0.5; const z=Math.random()-0.5; const s=14/(Math.abs(x)+Math.abs(y)+Math.abs(z)); return [x*s, y*s, z*s]; },
+        'shell': () => { const t=Math.random()*PI*4; const r=Math.exp(t*0.2); return [r*Math.cos(t*3), t*2-6, r*Math.sin(t*3)]; },
+        'vortex': () => { const h=(Math.random()-0.5)*24; const r=Math.abs(h)+1; const t=h*2.5; return [r*Math.cos(t), h, r*Math.sin(t)]; },
+        'infinity': () => { const t=Math.random()*PI*2; const s=12/(1+Math.sin(t)**2); return [s*Math.cos(t), s*Math.sin(t)*Math.cos(t), (Math.random()-0.5)*3]; },
+        'cloud': () => [(Math.random()-0.5)*30, (Math.random()-0.5)*10, (Math.random()-0.5)*20],
+        'blackhole': () => { const t=Math.random()*PI*2; const r=5+15*Math.random(); const y = -15/r; return [r*Math.cos(t), y, r*Math.sin(t)]; },
+        'rain': () => [(Math.random()-0.5)*30, Math.random()*30-15, (Math.random()-0.5)*30],
+        'nebula': () => pt(Math.random()*5 + 10)
+    };
+
+    for(let key in simpleShapes) {
+        shapes[key] = [];
+        for(let i=0; i<count; i++) shapes[key].push(...(simpleShapes[key](i) || pt(10)));
+    }
+}
+generateShapes();
+
+// --- 6. 音频逻辑 ---
+let analyser, dataArray;
+function initAudio() {
+    if (analyser) return;
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        STATE.audioEnabled = true;
+        toggleAudioUI(true);
+    }).catch(e => console.error("Audio denied", e));
+}
+
+function toggleAudioUI(active) {
+    const btns = [document.getElementById('btn-audio'), document.getElementById('btn-audio-m')];
+    btns.forEach(b => {
+        if(b) {
+            if(active) { b.classList.add('active'); b.innerText = b.innerText.includes('🎵') ? "🎵 On" : "🎵"; }
+            else { b.classList.remove('active'); }
+        }
+    });
+}
+
+function toggleBloomUI(active) {
+    const btns = [document.getElementById('btn-bloom'), document.getElementById('btn-bloom-m')];
+    btns.forEach(b => {
+        if(b) {
+            if(active) b.classList.add('active');
+            else b.classList.remove('active');
+        }
+    });
+}
+
+// --- 7. 摄像头逻辑 (移动端优化 + 错误诊断) ---
+const videoElement = document.getElementById('video-preview');
+let cameraUtils;
+
+function onResults(results) {
+    const statusEl = document.getElementById('status-gesture');
+    const tipEl = document.getElementById('camera-tip');
+    
+    if (statusEl.innerHTML.includes("LOADING") || statusEl.innerHTML.includes("FAIL")) {
+        videoElement.classList.add('active');
+        if(tipEl) tipEl.style.display = 'none';
+        document.getElementById('retry-cam-btn').style.display = 'none';
+    }
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        STATE.handDetected = true;
+        const lm = results.multiHandLandmarks[0];
+        const dist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+        
+        let target = (dist - 0.02) * 7;
+        STATE.targetScale = Math.max(0.1, Math.min(target, 2.5));
+
+        particles.rotation.y = (lm[9].x - 0.5) * 3;
+        particles.rotation.x = (lm[9].y - 0.5) * 3;
+
+        statusEl.innerText = "HAND FOUND";
+        statusEl.className = "text-[10px] px-2 py-1 rounded bg-green-500/20 text-green-400 border border-green-500/30";
+    } else {
+        STATE.handDetected = false;
+        STATE.targetScale = 1;
+        statusEl.innerText = "WAITING HAND";
+        statusEl.className = "text-[10px] px-2 py-1 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30";
+    }
+}
+
+async function startCamera() {
+    try {
+        // 1. 显式检查 HTTPS 环境 (浏览器安全策略)
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error("Browser API not supported. Are you on HTTPS?");
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5});
+        hands.onResults(onResults);
+
+        // 尝试启动
+        cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                if (videoElement.readyState >= 2) await hands.send({image: videoElement});
+            },
+            width: 320, height: 240,
+            facingMode: 'user' 
+        });
+        
+        await cameraUtils.start();
+    } catch(e) {
+        console.warn("Camera init failed:", e);
+        
+        // 详细错误处理
+        let errorMsg = "CAMERA FAIL";
+        let tipMsg = "Camera failed.";
+        
+        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+            tipMsg = "请在浏览器设置中允许摄像头权限";
+        } else if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+            tipMsg = "需要 HTTPS 协议才能使用摄像头";
+        } else {
+            tipMsg = "无法访问摄像头，请尝试刷新";
+        }
+
+        document.getElementById('status-gesture').innerText = "CAM ERROR";
+        document.getElementById('status-gesture').className = "text-[10px] px-2 py-1 rounded bg-red-500/20 text-red-300 border border-red-500/30";
+        if(document.getElementById('camera-tip')) {
+            document.getElementById('camera-tip').innerHTML = tipMsg;
+            document.getElementById('camera-tip').className = "text-[9px] text-red-400 mt-1 text-right";
+        }
+        document.getElementById('retry-cam-btn').style.display = 'block';
+    }
+}
+// 移动端也自动尝试启动
+setTimeout(startCamera, 1000);
+
+// --- 8. UI 生成 & 绑定 ---
+const shapesList = [
+    {id: 'sphere', icon: '🔵', n:'Sphere'}, {id: 'heart', icon: '❤️', n:'Heart'}, {id: 'dna', icon: '🧬', n:'DNA'}, {id: 'galaxy', icon: '🌌', n:'Galaxy'},
+    {id: 'mobius', icon: '♾️', n:'Mobius'}, {id: 'atom', icon: '⚛️', n:'Atom'}, {id: 'pyramid', icon: '📐', n:'Pyramid'}, {id: 'lotus', icon: '🪷', n:'Lotus'},
+    {id: 'star', icon: '⭐', n:'Star'}, {id: 'saturn', icon: '🪐', n:'Saturn'}, {id: 'vortex', icon: '🌪️', n:'Vortex'}, {id: 'wave', icon: '🌊', n:'Wave'},
+    {id: 'chaos', icon: '💥', n:'Chaos'}, {id: 'torus', icon: '🍩', n:'Torus'}, {id: 'tunnel', icon: '🚇', n:'Tunnel'}, {id: 'diamond', icon: '💎', n:'Gem'},
+    {id: 'grid', icon: '🕸️', n:'Grid'}, {id: 'shell', icon: '🐚', n:'Shell'}, {id: 'hourglass', icon: '⏳', n:'Time'}, {id: 'cube', icon: '🧊', n:'Cube'},
+    {id: 'ring', icon: '💍', n:'Ring'}, {id: 'cross', icon: '✝️', n:'Cross'}, {id: 'cone', icon: '🔺', n:'Cone'}, {id: 'cylinder', icon: '🔋', n:'Cylinder'},
+    {id: 'mushroom', icon: '🍄', n:'Shroom'}, {id: 'infinity', icon: '🔄', n:'Infinity'}, {id: 'cloud', icon: '☁️', n:'Cloud'}, {id: 'blackhole', icon: '🕳️', n:'Void'},
+    {id: 'rain', icon: '🌧️', n:'Rain'}, {id: 'nebula', icon: '✨', n:'Nebula'}
+];
+const btnBox = document.getElementById('shape-buttons');
+shapesList.forEach(s => {
+    const b = document.createElement('button');
+    b.className = `btn ${s.id==='sphere'?'active':''} justify-center text-[10px] py-2`;
+    b.innerHTML = `<span class="opacity-80">${s.icon}</span> ${s.n}`;
+    b.onclick = () => {
+        STATE.currentShape = s.id;
+        document.querySelectorAll('#shape-buttons .btn').forEach(btn=>btn.classList.remove('active'));
+        b.classList.add('active');
+    };
+    btnBox.appendChild(b);
+});
+
+// UI Event Listeners
+document.getElementById('size-slider').oninput = (e) => {
+    material.size = parseFloat(e.target.value);
+    document.getElementById('size-val').innerText = e.target.value;
+};
+document.getElementById('color-picker').oninput = (e) => {};
+
+// Desktop & Mobile button binding helper
+function bindBtn(ids, handler) {
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if(el) el.onclick = handler;
+    });
+}
+
+bindBtn(['btn-audio', 'btn-audio-m'], initAudio);
+bindBtn(['btn-bloom', 'btn-bloom-m'], () => {
+    STATE.bloomEnabled = !STATE.bloomEnabled;
+    toggleBloomUI(STATE.bloomEnabled);
+});
+bindBtn(['btn-fullscreen', 'btn-fs-m'], () => {
+    if(!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+    else document.exitFullscreen().catch(()=>{});
+});
+document.getElementById('btn-snapshot').onclick = () => {
+    renderer.render(scene, camera);
+    const link = document.createElement('a');
+    link.download = 'neon-particles.png';
+    link.href = renderer.domElement.toDataURL('image/png');
+    link.click();
+};
+
+document.getElementById('toggle-controls').onclick = () => {
+    document.getElementById('controls-panel').classList.toggle('panel-hidden');
+};
+document.getElementById('retry-cam-btn').onclick = function() {
+    this.innerText = "Connecting...";
+    startCamera();
+};
+
+// 交互：支持鼠标和触摸
+function handleInteraction(x, y) {
+    STATE.mouse.x = (x / window.innerWidth) * 2 - 1;
+    STATE.mouse.y = -(y / window.innerHeight) * 2 + 1;
+    if (!STATE.handDetected) {
+        particles.rotation.x += (y - window.innerHeight/2) * 0.00005;
+        particles.rotation.y += (x - window.innerWidth/2) * 0.00005;
+    }
+}
+
+window.addEventListener('mousemove', (e) => handleInteraction(e.clientX, e.clientY));
+window.addEventListener('touchmove', (e) => {
+    if(e.touches.length > 0) {
+        // e.preventDefault(); // 视情况开启防止滚动
+        handleInteraction(e.touches[0].clientX, e.touches[0].clientY);
+    }
+}, {passive: false});
+
+// --- 9. 渲染循环 ---
+const clock = new THREE.Clock();
+let frameCount = 0;
+let lastTime = 0;
+const fpsElem = document.getElementById('fps-counter');
+
+function animate() {
+    requestAnimationFrame(animate);
+    
+    const delta = clock.getDelta();
+    STATE.time += delta;
+
+    frameCount++;
+    if(STATE.time - lastTime >= 1) {
+        fpsElem.innerText = frameCount;
+        frameCount = 0;
+        lastTime = STATE.time;
+    }
+
+    STATE.currentScale += (STATE.targetScale - STATE.currentScale) * CONFIG.handInfluenceSpeed;
+
+    let audioAmp = 0;
+    if(STATE.audioEnabled && analyser) {
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+        audioAmp = sum / dataArray.length / 255;
+    }
+
+    const pos = particles.geometry.attributes.position.array;
+    const col = particles.geometry.attributes.color.array;
+    const target = shapes[STATE.currentShape] || shapes.sphere;
+
+    const baseColorHex = document.getElementById('color-picker').value;
+    const baseCol = new THREE.Color(baseColorHex);
+    const baseHSL = {};
+    baseCol.getHSL(baseHSL);
+
+    STATE.hueOffset += 0.002;
+
+    for(let i=0; i<CONFIG.particleCount; i++) {
+        const i3 = i * 3;
+        let tx = target[i3], ty = target[i3+1], tz = target[i3+2];
+
+        tx *= STATE.currentScale; ty *= STATE.currentScale; tz *= STATE.currentScale;
+
+        if(STATE.audioEnabled) {
+            const beat = 1 + audioAmp * CONFIG.audioSensitivity * (1 - Math.abs(ty)/25); 
+            tx *= beat; ty *= beat; tz *= beat;
+        } else {
+            const breathe = 1 + Math.sin(STATE.time * 2) * 0.03;
+            tx *= breathe; ty *= breathe; tz *= breathe;
+        }
+
+        pos[i3] += (tx - pos[i3]) * CONFIG.morphSpeed;
+        pos[i3+1] += (ty - pos[i3+1]) * CONFIG.morphSpeed;
+        pos[i3+2] += (tz - pos[i3+2]) * CONFIG.morphSpeed;
+
+        const dist = Math.sqrt(tx*tx + ty*ty + tz*tz);
+        let h = baseHSL.h + STATE.hueOffset + (dist * 0.015); 
+        let s = 0.8; 
+        let l = 0.5 + Math.sin(STATE.time * 4 + i) * 0.15;
+        if(STATE.audioEnabled) l += audioAmp * 0.4; 
+
+        colorObj.setHSL(h % 1, s, l);
+        col[i3] = colorObj.r; col[i3+1] = colorObj.g; col[i3+2] = colorObj.b;
+    }
+
+    particles.geometry.attributes.position.needsUpdate = true;
+    particles.geometry.attributes.color.needsUpdate = true;
+
+    if(!STATE.handDetected) {
+        particles.rotation.y += 0.002;
+        bgParticles.rotation.y -= 0.0005; 
+    }
+
+    try {
+        if(STATE.bloomEnabled && composer) {
+            composer.render();
+        } else {
+            renderer.render(scene, camera);
+        }
+    } catch(e) {
+        console.warn("Render crash", e);
+        STATE.bloomEnabled = false;
+        toggleBloomUI(false);
+        composer = null;
+        renderer.render(scene, camera);
+    }
+}
+
+animate();
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    if(composer) composer.setSize(window.innerWidth, window.innerHeight);
+});
+
+</script>
+</body>
+</html>
