@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D手势粒子系统</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            color: rgba(255, 255, 255, 0.9);
+            background: rgba(0, 0, 0, 0.6);
+            padding: 20px;
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(5px);
+            max-width: 300px;
+            pointer-events: all;
+            user-select: none;
+        }
+
+        h1 { margin: 0 0 15px 0; font-size: 1.2rem; font-weight: 300; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 10px; }
+        
+        .control-group { margin-bottom: 15px; }
+        .control-group label { display: block; font-size: 0.8rem; margin-bottom: 5px; color: #aaa; }
+        
+        select, button, input[type="range"] {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #fff;
+            padding: 8px;
+            border-radius: 5px;
+            outline: none;
+            transition: 0.3s;
+            cursor: pointer;
+        }
+        
+        option {
+            background-color: #222;
+            color: #fff;
+        }
+        
+        select:hover, button:hover { background: rgba(255, 255, 255, 0.2); border-color: rgba(255, 255, 255, 0.5); }
+        button:active { transform: scale(0.98); }
+        
+        .status-dot { height: 10px; width: 10px; background-color: #bbb; border-radius: 50%; display: inline-block; margin-right: 8px; box-shadow: 0 0 5px #bbb; transition: 0.3s; }
+        .status-active { background-color: #0f0; box-shadow: 0 0 8px #0f0; }
+        .status-loading { background-color: #ff0; box-shadow: 0 0 8px #ff0; }
+        
+        #camera-feed {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 160px;
+            height: 120px;
+            z-index: 10;
+            border-radius: 10px;
+            transform: scaleX(-1);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            opacity: 0; 
+            transition: opacity 0.5s;
+            background: #000;
+        }
+
+        .highlight-text { color: #ff69b4; font-weight: bold; }
+
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    <video id="camera-feed" playsinline></video>
+
+    <div id="ui-layer">
+        <h1>3D粒子 v3.0</h1>
+        
+        <div class="control-group">
+            <label>形状选择</label>
+            <select id="shape-select">
+                <option value="sphere">星云球体 (Sphere)</option>
+                <option value="cube">量子立方 (Cube)</option>
+                <option value="plane">粒子矩阵 (Plane)</option>
+                <option value="torus">时空圆环 (Torus)</option>
+                <option value="rose" class="highlight-text">永恒玫瑰 (Rose)</option>
+                <option value="heart">经典爱心 (Heart)</option>
+                <option value="doubleHeart">心心相印 (Double Heart)</option>
+                <option value="diamondRing">璀璨钻戒 (Diamond Ring)</option>
+                <option value="tree">圣诞树 (Xmas Tree)</option>
+                <option value="butterfly">梦幻蝴蝶 (Butterfly)</option>
+                <option value="wings">天使之翼 (Angel Wings)</option>
+                <option value="moon">星月夜 (Crescent Moon)</option>
+                <option value="star3d">伯利恒之星 (3D Star)</option>
+                <option value="gift">神秘礼物 (Gift Box)</option>
+                <option value="snowflake">晶莹雪花 (Snowflake)</option>
+                <option value="arrow">丘比特之箭 (Cupid's Arrow)</option>
+                <option value="letter">情书 (Love Letter)</option>
+                <option value="infinity">无限之爱 (Infinity)</option>
+                <option value="crown">皇冠 (Crown)</option>
+                <option value="dna">羁绊螺旋 (Romantic DNA)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>摄像头手势控制 <span id="hand-status" class="status-dot"></span></label>
+            <button id="toggle-cam">启动摄像头</button>
+        </div>
+
+        <div class="control-group">
+            <label>粒子数量 (需重置)</label>
+            <select id="particle-count">
+                <option value="30000">30,000 (标准 - 推荐)</option>
+                <option value="60000" selected>60,000 (高画质 - 晶体感强)</option>
+                <option value="100000">100,000 (极客模式)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>音频响应</label>
+            <button id="start-audio">开启麦克风律动</button>
+        </div>
+
+        <div style="font-size: 0.7rem; color: #666; margin-top: 10px;">
+            操作指南：<br>
+            • 左键拖拽：旋转模型<br>
+            • 滚轮滚动：缩放视角<br>
+            • 手势/鼠标悬停：吸引粒子
+        </div>
+    </div>
+
+    <script>
+        const CONFIG = {
+            particleCount: 60000,
+            particleSize: 0.18, 
+            bloomStrength: 1.8, 
+            bloomThreshold: 0.1,
+            bloomRadius: 0.6,
+            morphSpeed: 0.04,
+            handInteractionDist: 6,
+            colorSpeed: 0.0005
+        };
+
+        const STATE = {
+            currentTime: 0,
+            targetShape: 'sphere',
+            handDetected: false,
+            handPos: new THREE.Vector3(0, 0, 0),
+            audioEnabled: false,
+            audioLevel: 0,
+            camEnabled: false,
+            hueOffset: 0
+        };
+
+        let scene, camera, renderer, composer, controls; 
+        let particles, geometry, material;
+        let positionsOriginal, positionsTarget;
+        let audioContext, analyser, dataArray;
+        let handLandmarker, cameraObj;
+        let videoElement = document.getElementById('camera-feed');
+        function createLiquidGlassTexture() {
+            const size = 128;
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            
+            const center = size / 2;
+            const gradient = ctx.createRadialGradient(center, center, 0, center, center, size / 2);
+            
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)'); 
+            gradient.addColorStop(0.2, 'rgba(230, 240, 255, 0.8)');
+            gradient.addColorStop(0.5, 'rgba(120, 150, 255, 0.2)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+
+            ctx.beginPath();
+            ctx.arc(center - 15, center - 15, 8, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.fill();
+
+            const texture = new THREE.CanvasTexture(canvas);
+            return texture;
+        }
+
+        const SHAPES = {
+            sphere: (i, total) => {
+                const phi = Math.acos(-1 + (2 * i) / total);
+                const theta = Math.sqrt(total * Math.PI) * phi;
+                const r = 10;
+                return { x: r * Math.cos(theta) * Math.sin(phi), y: r * Math.sin(theta) * Math.sin(phi), z: r * Math.cos(phi) };
+            },
+            cube: (i, total) => {
+                const s = 14;
+                return { x: (Math.random() - 0.5) * s, y: (Math.random() - 0.5) * s, z: (Math.random() - 0.5) * s };
+            },
+            plane: (i, total) => {
+                const size = 20;
+                const side = Math.ceil(Math.sqrt(total));
+                const r = Math.floor(i / side);
+                const c = i % side;
+                return { x: (c / side - 0.5) * size, y: (r / side - 0.5) * size, z: 0 };
+            },
+            torus: (i, total) => {
+                const R = 8, r = 3;
+                const u = (i / total) * Math.PI * 2 * 15; 
+                const v = (i / total) * Math.PI * 2;
+                return { x: (R + r * Math.cos(v)) * Math.cos(u), y: (R + r * Math.cos(v)) * Math.sin(u), z: r * Math.sin(v) };
+            },
+            rose: (i, total) => {
+                const angle = i * 0.1;
+                const radius = 12 * (1 - i/total);
+                const y = (i/total - 0.5) * 10;
+                const petal = Math.cos(angle * 2.5);
+                return { x: (radius + petal*2) * Math.cos(angle), y: y + petal * 2, z: (radius + petal*2) * Math.sin(angle) };
+            },
+            heart: (i, total) => {
+                const t2 = (i / total) * Math.PI * 2 * 10;
+                const t = t2 % (Math.PI*2); 
+                const x = 16 * Math.pow(Math.sin(t), 3);
+                const y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+                const z = (Math.random() - 0.5) * 4; 
+                return { x: x * 0.5, y: y * 0.5, z: z };
+            },
+            doubleHeart: (i, total) => {
+                const which = i % 2;
+                const t = (i / total) * Math.PI * 2 * 10; 
+                const t_rad = t % (Math.PI*2);
+                const hx = 16 * Math.pow(Math.sin(t_rad), 3);
+                const hy = 13 * Math.cos(t_rad) - 5 * Math.cos(2*t_rad) - 2 * Math.cos(3*t_rad) - Math.cos(4*t_rad);
+                let x, y, z;
+                if (which === 0) { x = hx * 0.4 - 4; y = hy * 0.4; z = (Math.random()-0.5)*2; } 
+                else { x = hx * 0.4 + 4; y = hy * 0.4; z = (Math.random()-0.5)*2 + 2; }
+                return { x, y, z };
+            },
+            diamondRing: (i, total) => {
+                if (i < total * 0.8) {
+                    const u = (i / (total * 0.8)) * Math.PI * 2;
+                    const v = (i % 50) / 50 * Math.PI * 2;
+                    const R = 8, r = 0.8;
+                    return { x: (R + r * Math.cos(v)) * Math.cos(u), y: (R + r * Math.cos(v)) * Math.sin(u), z: r * Math.sin(v) };
+                } else {
+                    const s = 3; const yOffset = 9;
+                    const x = (Math.random() - 0.5) * s; const z = (Math.random() - 0.5) * s; const y = Math.random() * s + yOffset;
+                    const taper = 1 - (y - yOffset)/s;
+                    return { x: x * taper, y: y, z: z * taper };
+                }
+            },
+            tree: (i, total) => {
+                const h = 18; const y = (i / total) * h - h/2; 
+                const radius = ((h/2 - y) / h) * 8; const angle = i * 0.1;
+                return { x: radius * Math.cos(angle), y: y, z: radius * Math.sin(angle) };
+            },
+            butterfly: (i, total) => {
+                const t = (i / total) * 12 * Math.PI;
+                const r = Math.pow(Math.E, Math.cos(t)) - 2 * Math.cos(4 * t) + Math.pow(Math.sin(t / 12), 5);
+                const scale = 3;
+                return { x: scale * r * Math.sin(t), y: scale * r * Math.cos(t), z: (Math.random() - 0.5) * 2 };
+            },
+            wings: (i, total) => {
+                const side = i % 2 === 0 ? 1 : -1; const u = (i / total) * 10;
+                const x = side * (Math.sin(u) * 5 + u * 1.5);
+                const y = Math.cos(u) * 5 + Math.abs(x) * 0.2;
+                const z = Math.sin(u * 2) * 2 - Math.abs(x) * 0.5;
+                return { x: x * 0.6, y: y * 0.6, z: z * 0.6 };
+            },
+            moon: (i, total) => {
+                const angle = (i/total) * Math.PI * 2 * 0.8 - 0.5; const thick = Math.sin(angle + 1) * 2; const rad = 8;
+                return { x: rad * Math.cos(angle), y: rad * Math.sin(angle), z: (Math.random() - 0.5) * thick };
+            },
+            star3d: (i, total) => {
+                const rBase = 4; const spikes = 5; const u = (i/total) * Math.PI * 2; const v = (i % 100) / 100 * Math.PI;
+                const r = rBase + 4 * Math.abs(Math.sin(u * spikes) * Math.sin(v * spikes));
+                return { x: r * Math.sin(v) * Math.cos(u), y: r * Math.sin(v) * Math.sin(u), z: r * Math.cos(v) };
+            },
+            gift: (i, total) => {
+                const s = 10;
+                if (i < total * 0.8) { return { x: (Math.random() - 0.5) * s, y: (Math.random() - 0.5) * s, z: (Math.random() - 0.5) * s }; } 
+                else {
+                    const axis = i % 3; let x=0, y=0, z=0;
+                    if(axis===0) { x = (Math.random()-0.5)*s; y = 0; z = (Math.random()-0.5)*(s+1); }
+                    if(axis===1) { x = 0; y = (Math.random()-0.5)*(s+1); z = (Math.random()-0.5)*s; }
+                    if(axis===2) { x = (Math.random()-0.5)*(s+1); y = (Math.random()-0.5)*s; z = 0; }
+                    return {x,y,z};
+                }
+            },
+            snowflake: (i, total) => {
+                const branches = 6; const perBranch = total/branches; const t = (i % perBranch) / perBranch;
+                const angle = (Math.floor(i / perBranch) / branches) * Math.PI * 2; const dist = t * 10;
+                let x = Math.cos(angle) * dist; let y = Math.sin(angle) * dist;
+                const spike = Math.sin(t * 20) * (1-t) * 2;
+                x += Math.cos(angle + Math.PI/2) * spike; y += Math.sin(angle + Math.PI/2) * spike;
+                return { x, y, z: (Math.random()-0.5) * 0.5 };
+            },
+            arrow: (i, total) => {
+                const len = 16; const pos = (i / total) * len - len/2;
+                if (i > total * 0.8) { const t = (i - total*0.8) / (total*0.2); return { x: len/2 + t*2, y: (Math.random()-0.5)*t*4, z: (Math.random()-0.5)*t*4 }; } 
+                else if (i < total * 0.2) { const t = i / (total*0.2); return { x: -len/2 - t*2, y: (Math.random()-0.5)*(1-t)*4, z: (Math.random()-0.5)*(1-t)*4 }; } 
+                else { return { x: pos, y: (Math.random()-0.5)*0.5, z: (Math.random()-0.5)*0.5 }; }
+            },
+            letter: (i, total) => {
+                const w = 12, h = 8; const r = Math.random();
+                if (r < 0.8) { return { x: (Math.random() - 0.5) * w, y: (Math.random() - 0.5) * h, z: 0 }; } 
+                else { const t = Math.random(); return { x: (t - 0.5) * w, y: h/2 - Math.abs((t - 0.5) * w)*0.5, z: 0.2 }; }
+            },
+            infinity: (i, total) => {
+                const t = (i / total) * Math.PI * 2; const scale = 8; const den = 1 + Math.sin(t)*Math.sin(t);
+                return { x: (scale * Math.cos(t)) / den, y: (scale * Math.cos(t) * Math.sin(t)) / den, z: (Math.random()-0.5)*2 };
+            },
+            crown: (i, total) => {
+                const r = 6; const u = (i / total) * Math.PI * 2; const h = 3 + Math.abs(Math.sin(u * 2.5)) * 4;
+                return { x: r * Math.cos(u), y: Math.random() * h - 2, z: r * Math.sin(u) };
+            },
+            dna: (i, total) => {
+                const t = (i / total) * Math.PI * 8; const r = 3; const y = (i / total) * 16 - 8;
+                const offset = (i % 2 === 0) ? 0 : Math.PI;
+                return { x: r * Math.cos(t+offset), y: y, z: r * Math.sin(t+offset) };
+            }
+        };
+
+        // --- 初始化场景 ---
+        function init() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.02);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 25;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // --- 修复3：添加 OrbitControls (旋转与缩放) ---
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true; // 增加惯性，手感更滑
+            controls.dampingFactor = 0.05;
+            controls.enableZoom = true;    // 允许缩放
+            controls.autoRotate = false;   // 手动控制，关闭自动旋转(我们在animate中手动加一点微旋转)
+
+            // --- 辉光设置 ---
+            const renderScene = new THREE.RenderPass(scene, camera);
+            const bloomPass = new THREE.UnrealBloomPass(
+                new THREE.Vector2(window.innerWidth, window.innerHeight),
+                CONFIG.bloomStrength,
+                CONFIG.bloomRadius,
+                CONFIG.bloomThreshold
+            );
+            
+            composer = new THREE.EffectComposer(renderer);
+            composer.addPass(renderScene);
+            composer.addPass(bloomPass);
+
+            createParticles();
+            
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('mousemove', onMouseMove);
+            
+            setupUI();
+            setupMediaPipe();
+            setTimeout(() => {
+                toggleCamera(true);
+            }, 1000);
+
+            animate();
+        }
+
+        function createParticles() {
+            if(particles) scene.remove(particles);
+
+            const count = CONFIG.particleCount;
+            const posArray = new Float32Array(count * 3);
+            const colorArray = new Float32Array(count * 3);
+            
+            positionsOriginal = new Float32Array(count * 3);
+            positionsTarget = new Float32Array(count * 3);
+
+            const generator = SHAPES[STATE.targetShape] || SHAPES['sphere'];
+
+            for(let i=0; i<count; i++) {
+                const coords = generator(i, count);
+                posArray[i*3] = coords.x;
+                posArray[i*3+1] = coords.y;
+                posArray[i*3+2] = coords.z;
+                
+                positionsOriginal[i*3] = coords.x;
+                positionsOriginal[i*3+1] = coords.y;
+                positionsOriginal[i*3+2] = coords.z;
+                
+                positionsTarget[i*3] = coords.x;
+                positionsTarget[i*3+1] = coords.y;
+                positionsTarget[i*3+2] = coords.z;
+
+                colorArray[i*3] = 1;
+                colorArray[i*3+1] = 1;
+                colorArray[i*3+2] = 1;
+            }
+
+            geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+
+            const sprite = createLiquidGlassTexture();
+
+            material = new THREE.PointsMaterial({
+                size: CONFIG.particleSize,
+                map: sprite,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                transparent: true,
+                opacity: 0.9
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+        }
+
+        function changeShape(shapeName) {
+            STATE.targetShape = shapeName;
+            const count = CONFIG.particleCount;
+            const generator = SHAPES[shapeName] || SHAPES['sphere'];
+            
+            for(let i=0; i<count; i++) {
+                const coords = generator(i, count);
+                positionsTarget[i*3] = coords.x;
+                positionsTarget[i*3+1] = coords.y;
+                positionsTarget[i*3+2] = coords.z;
+            }
+
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            STATE.currentTime += 0.01;
+            STATE.hueOffset += CONFIG.colorSpeed;
+
+            controls.update();
+
+            const positions = particles.geometry.attributes.position.array;
+            const colors = particles.geometry.attributes.color.array;
+            const count = CONFIG.particleCount;
+            
+            let audioAmp = 0;
+            if(STATE.audioEnabled && analyser) {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+                audioAmp = sum / dataArray.length;
+                composer.passes[1].strength = CONFIG.bloomStrength + (audioAmp / 255) * 1.5;
+            }
+
+            const colorObj = new THREE.Color();
+            
+            let handX = 9999, handY = 9999;
+
+            if(STATE.handDetected) {
+
+                if(STATE.camEnabled) {
+
+                     handX = (STATE.handPos.x - 0.5) * 30;
+                     handY = -(STATE.handPos.y - 0.5) * 20; 
+                } else {
+
+                    _raycaster.setFromCamera(new THREE.Vector2(STATE.handPos.x * 2 - 1, -STATE.handPos.y * 2 + 1), camera);
+                    const targetZ = new THREE.Vector3(0,0,0);
+
+                    const distance = -camera.position.z / _raycaster.ray.direction.z; 
+
+                    handX = (STATE.handPos.x - 0.5) * 30;
+                    handY = -(STATE.handPos.y - 0.5) * 20;
+                }
+            }
+
+            for(let i=0; i<count; i++) {
+                const i3 = i * 3;
+                
+                const noise = Math.sin(STATE.currentTime + positions[i3+1] * 0.5) * 0.02;
+                
+                let tx = positionsTarget[i3] + noise;
+                let ty = positionsTarget[i3+1];
+                let tz = positionsTarget[i3+2];
+
+                if(audioAmp > 0) {
+                    tx *= (1 + audioAmp * 0.0005);
+                    ty *= (1 + audioAmp * 0.0005);
+                    tz *= (1 + audioAmp * 0.0005);
+                }
+
+                const dx = positions[i3] - handX;
+                const dy = positions[i3+1] - handY;
+
+                const distSq = dx*dx + dy*dy; 
+                
+                if(STATE.handDetected && distSq < CONFIG.handInteractionDist * CONFIG.handInteractionDist) {
+                    tx = handX + dx * 0.2; 
+                    ty = handY + dy * 0.2;
+                }
+
+                positions[i3] += (tx - positions[i3]) * CONFIG.morphSpeed;
+                positions[i3+1] += (ty - positions[i3+1]) * CONFIG.morphSpeed;
+                positions[i3+2] += (tz - positions[i3+2]) * CONFIG.morphSpeed;
+
+                const dist = Math.sqrt(tx*tx + ty*ty + tz*tz);
+                let h = (STATE.hueOffset + dist * 0.05) % 1;
+                let s = 0.85; 
+                let l = 0.5 + Math.sin(STATE.currentTime * 3 + i) * 0.1;
+                if(audioAmp > 0) l += (audioAmp/255) * 0.3;
+
+                if (['rose', 'heart', 'doubleHeart', 'love'].includes(STATE.targetShape)) {
+                    h = (0.9 + dist * 0.02 + STATE.hueOffset * 0.2) % 1; 
+                    if(h < 0.85 && h > 0.1) h = 0.95; 
+                } else if (['tree', 'nature'].includes(STATE.targetShape)) {
+                    h = (0.25 + dist * 0.05 + Math.sin(STATE.currentTime)*0.1) % 1; 
+                } else if (['moon', 'star3d', 'snowflake', 'diamondRing'].includes(STATE.targetShape)) {
+                    h = 0.6; s = 0.2 + dist * 0.05; l = 0.8;
+                }
+
+                colorObj.setHSL(h, s, l);
+                colors[i3] = colorObj.r; colors[i3+1] = colorObj.g; colors[i3+2] = colorObj.b;
+            }
+
+            particles.geometry.attributes.position.needsUpdate = true;
+            particles.geometry.attributes.color.needsUpdate = true;
+
+            particles.rotation.y += 0.001;
+
+            composer.render();
+        }
+
+        const _raycaster = new THREE.Raycaster();
+        function setupUI() {
+            const shapeSelect = document.getElementById('shape-select');
+            shapeSelect.addEventListener('change', (e) => {
+                e.preventDefault();
+                changeShape(e.target.value);
+            });
+
+            shapeSelect.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+
+            document.getElementById('particle-count').addEventListener('change', (e) => {
+                CONFIG.particleCount = parseInt(e.target.value);
+                createParticles();
+            });
+
+            document.getElementById('toggle-cam').addEventListener('click', () => toggleCamera(false));
+            document.getElementById('start-audio').addEventListener('click', initAudio);
+        }
+
+        function onMouseMove(e) {
+            if(e.buttons > 0) return;
+
+            if(!STATE.camEnabled) {
+                const x = e.clientX / window.innerWidth;
+                const y = e.clientY / window.innerHeight;
+                STATE.handPos.set(x, y, 0);
+                STATE.handDetected = true;
+                
+                clearTimeout(STATE.mouseTimer);
+                STATE.mouseTimer = setTimeout(() => { STATE.handDetected = false; }, 2000);
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+        async function setupMediaPipe() {
+            const hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+            
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onHandsResults);
+            handLandmarker = hands;
+        }
+
+        function onHandsResults(results) {
+            const statusDot = document.getElementById('hand-status');
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                statusDot.className = 'status-dot status-active';
+                const hand = results.multiHandLandmarks[0];
+                const indexTip = hand[8];
+                STATE.handPos.set(indexTip.x, indexTip.y, indexTip.z);
+                STATE.handDetected = true;
+            } else {
+                statusDot.className = 'status-dot';
+            }
+        }
+
+        async function toggleCamera(isAutoStart = false) {
+            const btn = document.getElementById('toggle-cam');
+            const statusDot = document.getElementById('hand-status');
+
+            if(STATE.camEnabled) {
+
+                if(!isAutoStart) {
+                    STATE.camEnabled = false;
+                    if(cameraObj) {
+                        const stream = videoElement.srcObject;
+                        if(stream) {
+                            stream.getTracks().forEach(track => track.stop());
+                        }
+                        videoElement.srcObject = null;
+                    }
+                    btn.innerText = "启动摄像头";
+                    statusDot.className = 'status-dot';
+                    videoElement.style.opacity = 0;
+                }
+                return;
+            }
+            
+            try {
+                if(!isAutoStart) {
+                    statusDot.className = 'status-dot status-loading';
+                    btn.innerText = "正在启动...";
+                }
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                videoElement.srcObject = stream;
+                videoElement.onloadedmetadata = () => {
+                    videoElement.play();
+                    videoElement.style.opacity = 0.5;
+                };
+
+                cameraObj = new Camera(videoElement, {
+                    onFrame: async () => {
+                        if(STATE.camEnabled) {
+                            await handLandmarker.send({image: videoElement});
+                        }
+                    },
+                    width: 320,
+                    height: 240
+                });
+                cameraObj.start();
+
+                STATE.camEnabled = true;
+                btn.innerText = "关闭摄像头";
+            } catch(e) {
+                console.error("Camera Error:", e);
+                if(!isAutoStart) {
+                    alert("无法访问摄像头。请检查权限或设备连接。");
+                    btn.innerText = "启动摄像头";
+                    statusDot.className = 'status-dot';
+                }
+            }
+        }
+
+        function initAudio() {
+            if(STATE.audioEnabled) return;
+            
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioContext = new AudioContext();
+            
+            navigator.mediaDevices.getUserMedia({ audio: true })
+            .then(stream => {
+                const source = audioContext.createMediaStreamSource(stream);
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                STATE.audioEnabled = true;
+                document.getElementById('start-audio').innerText = "麦克风已激活";
+                document.getElementById('start-audio').style.background = "rgba(0,255,0,0.2)";
+            })
+            .catch(err => alert('无法获取麦克风权限'));
+        }
+
+        init();
+
+    </script>
+</body>
+</html>
